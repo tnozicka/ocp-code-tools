@@ -24,13 +24,14 @@ import (
 type Options struct {
 	genericclioptions.IOStreams
 
-	GitURL, GitRef         string
-	ConfigSubpath          string
-	configFileRegexpString string
-	ConfigFileRegexp       *regexp.Regexp
-	PromotionNamespace     string
-	DataDir                string
-	ResyncEvery            time.Duration
+	CacheDir                   string
+	GitURL, GitRef             string
+	ConfigSubpath              string
+	allowedStreamsRegexpString string
+	configFileRegexpString     string
+	AllowedStreamsRegexp       *regexp.Regexp
+	ConfigFileRegexp           *regexp.Regexp
+	ResyncEvery                time.Duration
 
 	Kubeconfig          string
 	ControllerNamespace string
@@ -44,13 +45,13 @@ func NewOptions(streams genericclioptions.IOStreams) *Options {
 	return &Options{
 		IOStreams: streams,
 
-		GitURL:                 "https://github.com/openshift/release",
-		GitRef:                 "master",
-		ConfigSubpath:          "ci-operator/config/openshift",
-		configFileRegexpString: `.*\.yaml`,
-		PromotionNamespace:     "ocp",
-		DataDir:                "",
-		ResyncEvery:            15 * time.Minute,
+		CacheDir:                   "",
+		GitURL:                     "https://github.com/openshift/release",
+		GitRef:                     "master",
+		ConfigSubpath:              "ci-operator/config/openshift",
+		allowedStreamsRegexpString: `.*`,
+		configFileRegexpString:     `.*\.yaml`,
+		ResyncEvery:                15 * time.Minute,
 
 		Kubeconfig:          "",
 		ControllerNamespace: "",
@@ -92,12 +93,12 @@ func NewConfigCollectorCommand(streams genericclioptions.IOStreams) *cobra.Comma
 
 	rootCmd.PersistentFlags().AddGoFlagSet(flag.CommandLine)
 
+	rootCmd.PersistentFlags().StringVarP(&o.CacheDir, "cache-dir", "", o.CacheDir, "Directory to store repository cache.")
 	rootCmd.PersistentFlags().StringVarP(&o.GitURL, "git-url", "", o.GitURL, "Repository URL containing the release configs.")
 	rootCmd.PersistentFlags().StringVarP(&o.GitRef, "git-ref", "", o.GitRef, "Repository reference (master, <sha>, ...).")
 	rootCmd.PersistentFlags().StringVarP(&o.ConfigSubpath, "config-subpath", "", o.ConfigSubpath, "Location in the repository where to search for configs.")
+	rootCmd.PersistentFlags().StringVarP(&o.allowedStreamsRegexpString, "allowed-streams-regexp", "", o.allowedStreamsRegexpString, "Regular expression used to match allowed streams. Stream name is the <namespace>/<name> of the promotion configuration.")
 	rootCmd.PersistentFlags().StringVarP(&o.configFileRegexpString, "config-regexp", "", o.configFileRegexpString, "Regular expression used to match config files.")
-	rootCmd.PersistentFlags().StringVarP(&o.PromotionNamespace, "promotion-namespace", "", o.PromotionNamespace, "Accept only configs promoting to this namespace.")
-	rootCmd.PersistentFlags().StringVarP(&o.DataDir, "data-dir", "", o.DataDir, "Directory used to store temporary data.")
 	rootCmd.PersistentFlags().DurationVarP(&o.ResyncEvery, "resync-every", "", o.ResyncEvery, "Interval to resync the source git repository.")
 
 	rootCmd.PersistentFlags().StringVarP(&o.Kubeconfig, "kubeconfig", "", o.Kubeconfig, "Path to the kubeconfig file")
@@ -112,6 +113,10 @@ func NewConfigCollectorCommand(streams genericclioptions.IOStreams) *cobra.Comma
 func (o *Options) Validate() error {
 	var errs []error
 
+	if len(o.CacheDir) == 0 {
+		errs = append(errs, fmt.Errorf("cache directory is required"))
+	}
+
 	// TODO
 
 	return errors.NewAggregate(errs)
@@ -119,6 +124,11 @@ func (o *Options) Validate() error {
 
 func (o *Options) Complete() error {
 	var err error
+
+	o.AllowedStreamsRegexp, err = regexp.Compile(o.allowedStreamsRegexpString)
+	if err != nil {
+		return err
+	}
 
 	o.ConfigFileRegexp, err = regexp.Compile(o.configFileRegexpString)
 	if err != nil {
@@ -158,6 +168,8 @@ func (o *Options) Complete() error {
 }
 
 func (o *Options) Run(cmd *cobra.Command, streams genericclioptions.IOStreams) error {
+	klog.Infof("loglevel is set to %q", cmdutil.GetLoglevel())
+
 	stopCh := signals.StopChannel()
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -165,15 +177,15 @@ func (o *Options) Run(cmd *cobra.Command, streams genericclioptions.IOStreams) e
 		cancel()
 	}()
 
-	klog.Infof("loglevel is set to %q", cmdutil.GetLoglevel())
-
 	cc := route.NewCIConfigController(
+		o.CacheDir,
 		o.GitURL,
 		o.GitRef,
 		o.ConfigSubpath,
+		o.ConfigMapName,
+		o.ControllerNamespace,
+		o.AllowedStreamsRegexp,
 		o.ConfigFileRegexp,
-		o.PromotionNamespace,
-		o.DataDir,
 		o.ResyncEvery,
 		o.kubeClient,
 	)

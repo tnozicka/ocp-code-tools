@@ -5,6 +5,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"runtime/debug"
 
 	"k8s.io/klog/v2"
 )
@@ -25,6 +26,7 @@ func setupStopChannel() {
 		close(stopChannel)
 		<-c
 		klog.Infof("Received second shutdown signal: %s; exiting...", s)
+		debug.PrintStack()
 		os.Exit(1) // second signal. Exit directly.
 	}()
 }
